@@ -1,0 +1,745 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Share Media — Poonch Affairs</title>
+  <meta name="google-site-verification" content="d3bBegGx-FgL2179bGp7XPaoAtugERD75_uyz-a6v-U" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, serverTimestamp }
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey:            "AIzaSyCoswR0H9KLnGU8Y7NvUtwHL7ELXdtBZ-c",
+      authDomain:        "poonch-tourism.firebaseapp.com",
+      projectId:         "poonch-tourism",
+      storageBucket:     "poonch-tourism.firebasestorage.app",
+      messagingSenderId: "1015030062941",
+      appId:             "1:1015030062941:web:8137df102222018030d2b4"
+    };
+
+    const CLOUDINARY_CLOUD_NAME    = "dwtewffsh";
+    const CLOUDINARY_UPLOAD_PRESET = "poonch_affairs";
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getFirestore(app);
+
+    /* ── Upload a single file (image or video) ───────────── */
+    async function uploadToCloudinary(file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+      fd.append("folder", "poonch-affairs-media");
+
+      const isVideo = file.type.startsWith("video/");
+      const endpoint = isVideo ? "video" : "image";
+
+      const res = await fetch(
+        `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${endpoint}/upload`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok) throw new Error("Upload failed.");
+      const data = await res.json();
+      return { url: data.secure_url, type: isVideo ? "video" : "image" };
+    }
+
+    const MAX_FILES = 10;
+    let selectedFiles = [];
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const form        = document.getElementById("shareForm");
+      const submitBtn   = document.getElementById("submitBtn");
+      const toast       = document.getElementById("toast");
+      const fileInput   = document.getElementById("media");
+      const dropZone    = document.getElementById("dropZone");
+      const dropLabel   = document.getElementById("dropLabel");
+      const previewGrid = document.getElementById("previewGrid");
+      const progress    = document.getElementById("progressBar");
+      const fileCount   = document.getElementById("fileCount");
+
+      /* ── Render thumbnails ───────────────────────────────── */
+      function renderPreviews() {
+        previewGrid.innerHTML = "";
+        selectedFiles.forEach((file, idx) => {
+          const isVideo = file.type.startsWith("video/");
+          const wrap = document.createElement("div");
+          wrap.className = "thumb-wrap";
+
+          if (isVideo) {
+            const url = URL.createObjectURL(file);
+            wrap.innerHTML = `
+              <video src="${url}" class="thumb-img" muted playsinline></video>
+              <span class="thumb-type-badge">▶</span>
+              <button type="button" class="thumb-remove" title="Remove">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </button>`;
+          } else {
+            const reader = new FileReader();
+            reader.onload = ev => {
+              wrap.innerHTML = `
+                <img src="${ev.target.result}" class="thumb-img" alt="photo ${idx+1}"/>
+                <button type="button" class="thumb-remove" title="Remove">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                </button>`;
+              wrap.querySelector(".thumb-remove").addEventListener("click", () => removeFile(idx));
+            };
+            reader.readAsDataURL(file);
+          }
+
+          previewGrid.appendChild(wrap);
+
+          // attach remove for video immediately (innerHTML already set)
+          if (isVideo) {
+            wrap.querySelector(".thumb-remove").addEventListener("click", () => removeFile(idx));
+          }
+        });
+
+        fileCount.textContent = selectedFiles.length > 0
+          ? `${selectedFiles.length} of ${MAX_FILES} files`
+          : "";
+        updateDropZone();
+      }
+
+      function removeFile(idx) {
+        selectedFiles.splice(idx, 1);
+        renderPreviews();
+        updateDropZone();
+        clearDropError();
+      }
+
+      function updateDropZone() {
+        if (selectedFiles.length >= MAX_FILES) {
+          dropLabel.style.opacity = "0.3";
+          dropZone.style.pointerEvents = "none";
+        } else {
+          dropLabel.style.opacity = "";
+          dropZone.style.pointerEvents = "";
+        }
+      }
+
+      /* ── Add files ───────────────────────────────────────── */
+      function addFiles(newFiles) {
+        const arr = Array.from(newFiles);
+        for (const f of arr) {
+          if (selectedFiles.length >= MAX_FILES) break;
+          const isImg   = f.type.startsWith("image/");
+          const isVideo = f.type.startsWith("video/");
+          if (!isImg && !isVideo) continue;
+          if (f.size > 100 * 1024 * 1024) {
+            showToast(`"${f.name}" exceeds 100 MB, skipped.`, "error"); continue;
+          }
+          const dup = selectedFiles.some(x => x.name === f.name && x.size === f.size);
+          if (!dup) selectedFiles.push(f);
+        }
+        renderPreviews();
+        clearDropError();
+      }
+
+      fileInput.addEventListener("change", () => { addFiles(fileInput.files); fileInput.value = ""; });
+
+      dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+      dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+      dropZone.addEventListener("drop", e => {
+        e.preventDefault(); dropZone.classList.remove("drag-over"); addFiles(e.dataTransfer.files);
+      });
+
+      /* ── Validation helpers ──────────────────────────────── */
+      function setError(el, msg) {
+        el.classList.add("input-error");
+        let err = el.closest(".form-group").querySelector(".field-error");
+        if (!err) { err = document.createElement("span"); err.className = "field-error"; el.closest(".form-group").appendChild(err); }
+        err.textContent = msg;
+      }
+      function clearError(el) {
+        el.classList.remove("input-error");
+        el.closest(".form-group")?.querySelector(".field-error")?.remove();
+      }
+      function setDropError(msg) {
+        dropZone.classList.add("drop-error");
+        let err = dropZone.closest(".form-group").querySelector(".drop-field-error");
+        if (!err) { err = document.createElement("span"); err.className = "field-error drop-field-error"; dropZone.closest(".form-group").appendChild(err); }
+        err.textContent = msg;
+      }
+      function clearDropError() {
+        dropZone.classList.remove("drop-error");
+        document.querySelector(".drop-field-error")?.remove();
+      }
+
+      ["sname","sinsta"].forEach(id => {
+        document.getElementById(id).addEventListener("input", () => clearError(document.getElementById(id)));
+      });
+
+      /* ── Submit ──────────────────────────────────────────── */
+      form.addEventListener("submit", async e => {
+        e.preventDefault();
+        const name  = document.getElementById("sname").value.trim();
+        const insta = document.getElementById("sinsta").value.trim();
+
+        let ok = true;
+        if (!name)  { setError(document.getElementById("sname"),  "Your name is required."); ok = false; }
+        if (!insta) { setError(document.getElementById("sinsta"), "Instagram username is required."); ok = false; }
+        if (selectedFiles.length === 0) { setDropError("Please select at least one photo or video."); ok = false; }
+        if (!ok) {
+          showToast("Please fix the errors above.", "error");
+          form.querySelector(".input-error, .drop-error")?.scrollIntoView({ behavior:"smooth", block:"center" });
+          return;
+        }
+
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<span class="btn-spinner"></span> Uploading…`;
+        progress.style.width = "10%";
+
+        try {
+          const total = selectedFiles.length;
+          let done = 0;
+          const mediaItems = await Promise.all(
+            selectedFiles.map(async file => {
+              const item = await uploadToCloudinary(file);
+              done++;
+              progress.style.width = `${10 + Math.round((done / total) * 75)}%`;
+              submitBtn.innerHTML = `<span class="btn-spinner"></span> Uploading ${done} of ${total}…`;
+              return item;
+            })
+          );
+
+          progress.style.width = "90%";
+          submitBtn.innerHTML = `<span class="btn-spinner"></span> Saving…`;
+
+          /* Save to the SAME "issues" collection, flagged as media_share */
+          await addDoc(collection(db, "issues"), {
+            type:        "media_share",
+            name,
+            instagram:   insta,
+            mediaItems,                          // [{url, type}, …]
+            imageUrls:   mediaItems.map(m => m.url), // convenience field
+            photoCount:  total,
+            status:      "pending",
+            submittedAt: serverTimestamp()
+          });
+
+          progress.style.width = "100%";
+          showToast(`${total} file${total>1?"s":""} shared successfully. Thank you!`, "success");
+          form.reset();
+          selectedFiles = [];
+          previewGrid.innerHTML = "";
+          fileCount.textContent = "";
+          updateDropZone();
+          clearDropError();
+          setTimeout(() => { progress.style.width = "0%"; }, 1000);
+
+        } catch (err) {
+          console.error(err);
+          showToast("Something went wrong. Please try again.", "error");
+          progress.style.width = "0%";
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = `Share`;
+        }
+      });
+
+      function showToast(msg, type) {
+        toast.querySelector(".toast-msg").textContent = msg;
+        toast.className = `toast show ${type}`;
+        setTimeout(() => { toast.className = "toast"; }, 4500);
+      }
+    });
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+
+    :root {
+      --white:      #ffffff;
+      --bg:         #f5f5f7;
+      --surface:    #ffffff;
+      --divider:    #d2d2d7;
+      --text:       #1d1d1f;
+      --secondary:  #6e6e73;
+      --tertiary:   #aeaeb2;
+      --blue:       #0071e3;
+      --blue-hover: #0077ed;
+      --blue-press: #006edb;
+      --red:        #ff3b30;
+      --green:      #34c759;
+      --radius-sm:  10px;
+      --radius-md:  14px;
+      --radius-xl:  22px;
+      --font:       'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --shadow-sm:  0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-md:  0 4px 16px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    /* ── Nav ─────────────────────────────────────────────── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(255,255,255,0.82);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 0.5px solid var(--divider);
+    }
+    .nav-inner {
+      max-width: 680px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 52px;
+    }
+    .nav-logo {
+      font-family: var(--font-serif);
+      font-size: 1.1rem; font-weight: 400;
+      letter-spacing: -0.1px; color: var(--text);
+      text-decoration: none;
+    }
+    .nav-back {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 0.82rem; font-weight: 500;
+      color: var(--blue);
+      text-decoration: none;
+      letter-spacing: -0.1px;
+    }
+    .nav-back svg { flex-shrink: 0; }
+
+    /* ── Layout ──────────────────────────────────────────── */
+    .container {
+      max-width: 680px; margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+
+    /* ── Hero ────────────────────────────────────────────── */
+    .hero { padding: 64px 0 44px; text-align: center; }
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.78rem; font-weight: 500;
+      color: var(--blue); margin-bottom: 14px;
+    }
+    .hero h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(2.3rem, 6vw, 3.6rem);
+      font-weight: 400;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+    .hero h1 em { font-style: italic; color: var(--secondary); }
+    .hero-sub {
+      font-size: 0.97rem;
+      color: var(--secondary);
+      max-width: 400px;
+      margin: 0 auto 36px;
+      line-height: 1.65;
+      letter-spacing: -0.1px;
+    }
+    .hero-chips {
+      display: flex; justify-content: center;
+      flex-wrap: wrap; gap: 8px;
+    }
+    .chip {
+      font-size: 0.78rem; font-weight: 500;
+      color: var(--secondary);
+      background: var(--white);
+      border: 0.5px solid var(--divider);
+      border-radius: 50px;
+      padding: 6px 14px;
+      box-shadow: var(--shadow-sm);
+      display: flex; align-items: center; gap: 5px;
+    }
+
+    /* ── Card ────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-md);
+      border: 0.5px solid var(--divider);
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .card-top {
+      padding: 28px 32px 20px;
+      border-bottom: 0.5px solid var(--divider);
+    }
+    .card-top-label {
+      font-size: 0.7rem; font-weight: 600;
+      color: var(--tertiary);
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .card-top h2 {
+      font-family: var(--font-serif);
+      font-size: 1.5rem; font-weight: 400;
+      letter-spacing: -0.2px; color: var(--text);
+    }
+    .card-top p { font-size: 0.85rem; color: var(--secondary); margin-top: 4px; }
+    .card-body { padding: 28px 32px 32px; }
+
+    /* ── Sections ────────────────────────────────────────── */
+    .section-title {
+      font-size: 0.72rem; font-weight: 600;
+      color: var(--tertiary);
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      margin-bottom: 14px; margin-top: 28px;
+    }
+    .section-title:first-child { margin-top: 0; }
+
+    /* ── Form ────────────────────────────────────────────── */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group.full { grid-column: 1 / -1; }
+
+    label {
+      font-size: 0.78rem; font-weight: 500;
+      color: var(--secondary); letter-spacing: -0.1px;
+    }
+    label .req { color: var(--red); margin-left: 2px; font-weight: 400; }
+
+    .input-wrap { position: relative; }
+    .input-prefix {
+      position: absolute; left: 14px; top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.92rem; color: var(--secondary);
+      pointer-events: none;
+    }
+    .input-wrap input { padding-left: 26px; }
+
+    input {
+      width: 100%;
+      background: var(--bg);
+      border: 0.5px solid var(--divider);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.92rem; font-weight: 400;
+      padding: 11px 14px;
+      outline: none;
+      transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+      -webkit-appearance: none;
+      letter-spacing: -0.1px;
+    }
+    input::placeholder { color: var(--tertiary); }
+    input:focus {
+      border-color: var(--blue);
+      background: var(--white);
+      box-shadow: 0 0 0 3px rgba(0,113,227,0.12);
+    }
+    .input-error {
+      border-color: var(--red) !important;
+      background: rgba(255,59,48,0.04) !important;
+      box-shadow: 0 0 0 3px rgba(255,59,48,0.1) !important;
+    }
+    .field-error {
+      font-size: 0.73rem; color: var(--red);
+      font-weight: 500; display: block;
+      margin-top: 2px; letter-spacing: -0.1px;
+    }
+
+    /* ── Drop zone ───────────────────────────────────────── */
+    .drop-zone {
+      border: 0.5px dashed var(--divider);
+      border-radius: var(--radius-md);
+      background: var(--bg);
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+      position: relative;
+    }
+    .drop-zone:hover { border-color: var(--blue); background: rgba(0,113,227,0.04); }
+    .drop-zone.drag-over {
+      border-color: var(--blue);
+      background: rgba(0,113,227,0.06);
+      box-shadow: 0 0 0 3px rgba(0,113,227,0.12);
+    }
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0;
+      cursor: pointer; width: 100%; height: 100%;
+      padding: 0; border: none;
+    }
+    .drop-error {
+      border-color: var(--red) !important;
+      background: rgba(255,59,48,0.04) !important;
+      box-shadow: 0 0 0 3px rgba(255,59,48,0.1) !important;
+    }
+    #dropLabel { pointer-events: none; }
+    .drop-icon-wrap {
+      width: 48px; height: 48px;
+      background: var(--white);
+      border-radius: 12px;
+      border: 0.5px solid var(--divider);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 14px;
+      box-shadow: var(--shadow-sm);
+      font-size: 1.4rem;
+    }
+    #dropLabel p { font-size: 0.84rem; color: var(--secondary); line-height: 1.5; }
+    #dropLabel p span { color: var(--blue); font-weight: 500; }
+    #dropLabel small {
+      font-size: 0.72rem; color: var(--tertiary);
+      display: block; margin-top: 4px;
+    }
+
+    /* ── File count ──────────────────────────────────────── */
+    .file-meta-row { margin-top: 10px; }
+    #fileCount { font-size: 0.73rem; font-weight: 500; color: var(--secondary); }
+
+    /* ── Preview grid ────────────────────────────────────── */
+    #previewGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+      gap: 8px; margin-top: 10px;
+    }
+    .thumb-wrap {
+      position: relative; border-radius: var(--radius-sm);
+      overflow: hidden; aspect-ratio: 1;
+      border: 0.5px solid var(--divider);
+      animation: fadeIn 0.2s ease;
+      background: var(--bg);
+    }
+    @keyframes fadeIn { from { opacity:0; transform:scale(0.94); } to { opacity:1; transform:scale(1); } }
+    .thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb-type-badge {
+      position: absolute; bottom: 5px; left: 6px;
+      font-size: 0.6rem;
+      background: rgba(0,0,0,0.55);
+      color: #fff; border-radius: 4px;
+      padding: 2px 5px; backdrop-filter: blur(4px);
+    }
+    .thumb-remove {
+      position: absolute; top: 5px; right: 5px;
+      width: 20px; height: 20px;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+      color: #fff; border: none; border-radius: 50%;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+    }
+    .thumb-remove:hover { background: var(--red); }
+
+    /* ── Progress ────────────────────────────────────────── */
+    .progress-wrap {
+      height: 2px; background: var(--divider);
+      border-radius: 2px; margin-top: 24px; overflow: hidden;
+    }
+    #progressBar {
+      height: 100%; width: 0%;
+      background: var(--blue);
+      border-radius: 2px;
+      transition: width 0.35s ease;
+    }
+
+    /* ── Button ──────────────────────────────────────────── */
+    .btn-submit {
+      margin-top: 16px; width: 100%;
+      background: var(--blue); color: #fff;
+      font-family: var(--font);
+      font-size: 0.95rem; font-weight: 500;
+      letter-spacing: -0.2px;
+      border: none; border-radius: var(--radius-md);
+      padding: 14px; cursor: pointer;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-submit:hover:not(:disabled) {
+      background: var(--blue-hover);
+      box-shadow: 0 4px 16px rgba(0,113,227,0.28);
+    }
+    .btn-submit:active:not(:disabled) { background: var(--blue-press); transform: scale(0.99); }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-spinner {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin 0.7s linear infinite; display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Footnote ────────────────────────────────────────── */
+    .footnote {
+      margin-top: 16px; text-align: center;
+      font-size: 0.73rem; color: var(--tertiary);
+      line-height: 1.55; letter-spacing: -0.1px;
+    }
+    .footnote a { color: var(--blue); text-decoration: none; }
+
+    /* ── Toast ───────────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: rgba(30,30,32,0.88);
+      backdrop-filter: saturate(180%) blur(16px);
+      -webkit-backdrop-filter: saturate(180%) blur(16px);
+      color: #fff; border-radius: 50px;
+      padding: 12px 22px;
+      font-size: 0.85rem; font-weight: 500;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+      transition: transform 0.38s cubic-bezier(0.34,1.4,0.64,1), opacity 0.3s;
+      z-index: 9999; white-space: nowrap;
+      display: flex; align-items: center; gap: 8px;
+      letter-spacing: -0.1px; opacity: 0;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .toast.success::before { content:""; width:8px; height:8px; background:var(--green); border-radius:50%; flex-shrink:0; }
+    .toast.error::before   { content:""; width:8px; height:8px; background:var(--red);   border-radius:50%; flex-shrink:0; }
+
+    /* ── Footer ──────────────────────────────────────────── */
+    footer {
+      border-top: 0.5px solid var(--divider);
+      padding: 28px 24px; text-align: center;
+    }
+    footer p { font-size: 0.78rem; color: var(--tertiary); }
+    .insta-link {
+      display: inline-flex; align-items: center; gap: 7px;
+      margin-top: 10px; font-size: 0.82rem;
+      color: var(--blue); font-weight: 500;
+      text-decoration: none; letter-spacing: -0.1px;
+    }
+    .insta-link:hover { text-decoration: underline; }
+
+    /* ── Responsive ──────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .container { padding: 0 16px 60px; }
+      .card-top  { padding: 22px 20px 16px; }
+      .card-body { padding: 22px 20px 24px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .hero { padding: 48px 0 32px; }
+      .hero h1 { font-size: 2.3rem; }
+      #previewGrid { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); }
+    }
+
+    /* ── Entrance animations ─────────────────────────────── */
+    [data-fade] { opacity:0; transform:translateY(16px); animation: rise 0.55s ease forwards; }
+    [data-fade="1"] { animation-delay: 0.05s; }
+    [data-fade="2"] { animation-delay: 0.12s; }
+    [data-fade="3"] { animation-delay: 0.18s; }
+    [data-fade="4"] { animation-delay: 0.24s; }
+    [data-fade="5"] { animation-delay: 0.30s; }
+    @keyframes rise { to { opacity:1; transform:translateY(0); } }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="nav-inner">
+      <a class="nav-logo" href="#">Poonch Affairs</a>
+      <a class="nav-back" href="https://poonchaffairs.netlify.app/">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Report an issue
+      </a>
+    </div>
+  </nav>
+
+  <main class="container">
+
+    <section class="hero">
+      <div class="hero-eyebrow" data-fade="1">
+        📸 &nbsp;Poonch District, J&amp;K
+      </div>
+      <h1 data-fade="2">Share your<br><em>photos &amp; videos.</em></h1>
+      <p class="hero-sub" data-fade="3">
+        Drop your media directly — just your name and Instagram.
+        No phone number needed, ever.
+      </p>
+      <div class="hero-chips" data-fade="4">
+        <span class="chip">📷 Photos &amp; videos</span>
+        <span class="chip">🔒 Secure upload</span>
+        <span class="chip">✦ Always free</span>
+      </div>
+    </section>
+
+    <div class="card" data-fade="5">
+      <div class="card-top">
+        <div class="card-top-label">Media upload</div>
+        <h2>Share Media</h2>
+        <p>Your name and Instagram are the only things we need.</p>
+      </div>
+
+      <div class="card-body">
+        <form id="shareForm" novalidate>
+
+          <p class="section-title">Your identity</p>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="sname">Full name <span class="req">*</span></label>
+              <input id="sname" type="text" placeholder="Raza Khan" required autocomplete="name"/>
+            </div>
+            <div class="form-group">
+              <label for="sinsta">Instagram <span class="req">*</span></label>
+              <div class="input-wrap">
+                <span class="input-prefix">@</span>
+                <input id="sinsta" type="text" placeholder="yourhandle" required/>
+              </div>
+            </div>
+          </div>
+
+          <p class="section-title">Your media</p>
+          <div class="form-group full">
+            <label>
+              Photos &amp; Videos
+              <span class="req">*</span>
+              <span style="font-size:0.72rem;color:var(--tertiary);font-weight:400;letter-spacing:0;text-transform:none;"> — up to 10 files · 100 MB each</span>
+            </label>
+            <div class="drop-zone" id="dropZone">
+              <input type="file" id="media" accept="image/*,video/*" multiple/>
+              <div id="dropLabel">
+                <div class="drop-icon-wrap">🎞️</div>
+                <p>Drag &amp; drop or <span>browse files</span></p>
+                <small>JPG · PNG · WEBP · MP4 · MOV · HEVC</small>
+              </div>
+            </div>
+            <div class="file-meta-row">
+              <span id="fileCount"></span>
+            </div>
+            <div id="previewGrid"></div>
+          </div>
+
+          <div class="progress-wrap"><div id="progressBar"></div></div>
+
+          <button type="submit" class="btn-submit" id="submitBtn">Share</button>
+
+          <p class="footnote">
+            Your name and handle are used only to credit your content.
+            We never ask for your phone number.<br>
+            <a href="https://instagram.com/poonchaffairs" target="_blank">@poonchaffairs</a>
+          </p>
+
+        </form>
+      </div>
+    </div>
+
+  </main>
+
+  <div class="toast" id="toast"><span class="toast-msg"></span></div>
+
+  <footer>
+    <p>Made for the people of Poonch &nbsp;·&nbsp; © 2025 Poonch Affairs</p>
+    <a class="insta-link" href="https://instagram.com/poonchaffairs" target="_blank">
+      Follow us on Instagram
+    </a>
+  </footer>
+
+</body>
+</html>
